@@ -57,6 +57,8 @@ def format_data(files, data_provider):
                 header = 0 if line.decode("utf-8").startswith("open_time") else None
             df = pd.read_csv(myzip.open(myzip.filelist[0]), header=header).iloc[:, :11]
             df.columns = ["start_time", "open", "high", "low", "close", "volume", "end_time", "volume_usd", "n_trades", "taker_volume", "taker_volume_usd"]
+            # 检查时间戳
+            print(f"Processing {file}, end_time sample: {df['end_time'].head(5)}")
             df.index = [pd.Timestamp(x + 1, unit="ms").to_datetime64() for x in df["end_time"]]
             df.index.name = "date"
             price_df = pd.concat([price_df, df])
@@ -67,6 +69,8 @@ def format_data(files, data_provider):
                 data = json.load(f)
                 df = pd.DataFrame(data)
                 df.columns = ["timestamp", "open", "high", "low", "close"]
+                # 检查时间戳
+                print(f"Processing {file}, timestamp sample: {df['timestamp'].head(5)}")
                 df["date"] = pd.to_datetime(df["timestamp"], unit="ms")
                 df.drop(columns=["timestamp"], inplace=True)
                 df.set_index("date", inplace=True)

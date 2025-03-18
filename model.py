@@ -38,20 +38,22 @@ def format_data(files, data_provider, output_path):
         print("No new files to process")
         return
     
-    # 使用传入的 files，而不是重新扫描目录
+    print(f"Files received: {files}")  # 调试：打印文件列表
+    
+    # 过滤文件，使用 os.path.basename 提取文件名
     if data_provider == "binance":
-        files = [f for f in files if f.startswith(f"{TOKEN}USDT")]
+        files = [f for f in files if os.path.basename(f).startswith(f"{TOKEN}USDT")]
     elif data_provider == "coingecko":
-        files = [f for f in files if f.endswith(".json")]
+        files = [f for f in files if os.path.basename(f).endswith(".json")]
 
     if len(files) == 0:
-        print("No matching files found")
+        print("No matching files found after filtering")
         return
 
     price_df = pd.DataFrame()
     if data_provider == "binance":
         for file in files:
-            zip_file_path = os.path.join(binance_data_path, file)
+            zip_file_path = os.path.join(binance_data_path, file) if not os.path.isabs(file) else file
             if not zip_file_path.endswith(".zip"):
                 continue
             myzip = ZipFile(zip_file_path)
@@ -72,7 +74,8 @@ def format_data(files, data_provider, output_path):
             print("No data processed for Binance")
     elif data_provider == "coingecko":
         for file in files:
-            with open(os.path.join(coingecko_data_path, file), "r") as f:
+            file_path = os.path.join(coingecko_data_path, file) if not os.path.isabs(file) else file
+            with open(file_path, "r") as f:
                 data = json.load(f)
                 df = pd.DataFrame(data)
                 df.columns = ["timestamp", "open", "high", "low", "close"]

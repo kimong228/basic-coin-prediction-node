@@ -12,7 +12,8 @@ from config import data_base_path, model_file_path, TOKEN, MODEL, CG_API_KEY, TR
 
 binance_data_path = os.path.join(data_base_path, "binance")
 coingecko_data_path = os.path.join(data_base_path, "coingecko")
-training_price_data_path = os.path.join(data_base_path, "price_data.csv")
+eth_price_data_path = os.path.join(data_base_path, "eth_price_data.csv")  # ETH 数据文件
+btc_price_data_path = os.path.join(data_base_path, "btc_price_data.csv")  # BTC 数据文件
 
 def download_data_binance(token, training_days, region):
     files = download_binance_daily_data(f"{token}USDT", training_days, region, binance_data_path)
@@ -32,13 +33,13 @@ def download_data(token, training_days, region, data_provider):
     else:
         raise ValueError("Unsupported data provider")
 
-def format_data(files, data_provider):
+def format_data(files, data_provider, output_path):
     if not files:
         print("Already up to date")
         return
     
     if data_provider == "binance":
-        files = sorted([x for x in os.listdir(binance_data_path) if x.startswith(f"{TOKEN}USDT")])
+        files = sorted([x for x in os.listdir(binance_data_path) if x in files])
     elif data_provider == "coingecko":
         files = sorted([x for x in os.listdir(coingecko_data_path) if x.endswith(".json")])
 
@@ -57,14 +58,12 @@ def format_data(files, data_provider):
                 header = 0 if line.decode("utf-8").startswith("open_time") else None
             df = pd.read_csv(myzip.open(myzip.filelist[0]), header=header).iloc[:, :11]
             df.columns = ["start_time", "open", "high", "low", "close", "volume", "end_time", "volume_usd", "n_trades", "taker_volume", "taker_volume_usd"]
-            # 检查时间戳并转换为毫秒
             print(f"Processing {file}, end_time sample: {df['end_time'].head(5)}")
-            # 假设时间戳是微秒，除以 1000 转为毫秒
             df['end_time'] = df['end_time'] // 1000  # 微秒 -> 毫秒
             df.index = [pd.Timestamp(x + 1, unit="ms").to_datetime64() for x in df["end_time"]]
             df.index.name = "date"
             price_df = pd.concat([price_df, df])
-        price_df.sort_index().to_csv(training_price_data_path)
+        price_df.sort_index().to_csv(output_path)
     elif data_provider == "coingecko":
         for file in files:
             with open(os.path.join(coingecko_data_path, file), "r") as f:
@@ -76,27 +75,22 @@ def format_data(files, data_provider):
                 df.drop(columns=["timestamp"], inplace=True)
                 df.set_index("date", inplace=True)
                 price_df = pd.concat([price_df, df])
-        price_df.sort_index().to_csv(training_price_data_path)
+        price_df.sort_index().to_csv(output_path)
 
 def load_frame(frame, timeframe):
     print(f"Loading data...")
     df = frame.loc[:, ['open', 'high', 'low', 'close']].dropna()
     df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].apply(pd.to_numeric)
     
-    # 清理日期列
     df['date'] = frame['date']
-    # 尝试将日期转换为时间戳
     try:
-        df['date'] = pd.to_numeric(df['date'])  # 先转换为数值
-        # 如果时间戳过大（微秒），转换为毫秒
+        df['date'] = pd.to_numeric(df['date'])
         if df['date'].max() > 4102444800000:  # 超过 2100-01-01 的毫秒时间戳
-            df['date'] = df['date'] // 1000  # 微秒 -> 毫秒
+            df['date'] = df['date'] // 1000
         df['date'] = pd.to_datetime(df['date'], unit='ms', errors='coerce')
     except ValueError:
-        # 如果已经是字符串格式，直接解析
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
     
-    # 移除无效日期
     df = df.dropna(subset=['date'])
     if df.empty:
         raise ValueError("No valid dates found in the data after cleaning.")
@@ -106,13 +100,13 @@ def load_frame(frame, timeframe):
     return df.resample(f'{timeframe}', label='right', closed='right', origin='end').mean()
 
 def generate_features(df, token="ETHUSDT"):
-    """Generate lag features for ETH and BTC as per xgboost_train_convert_ETH.py"""
-    # Ensure we have both ETH and BTC data
+    """Generate lag features for ETH and BTC"""
     if token == "ETHUSDT":
         eth_df = df.copy()
+        # 下载并格式化 BTC 数据
         btc_files = download_data_binance("BTC", TRAINING_DAYS, REGION, "binance")
-        format_data(btc_files, "binance")
-        btc_df = pd.read_csv(training_price_data_path)
+        format_data(btc_files, "binance", btc_price_data_path)
+        btc_df = pd.read_csv(btc_price_data_path)
         btc_df = load_frame(btc_df, timeframe)
         btc_df.columns = [f"{col}_BTCUSDT" for col in btc_df.columns]
         df = eth_df.join(btc_df, how="inner")
@@ -132,27 +126,24 @@ def generate_features(df, token="ETHUSDT"):
     return df
 
 def train_model(timeframe):
-    # Load the price data
-    price_data = pd.read_csv(training_price_data_path)
-    df = load_frame(price_data, timeframe)
+    # Load ETH price data
+    eth_price_data = pd.read_csv(eth_price_data_path)
+    df = load_frame(eth_price_data, timeframe)
 
     if MODEL == "XGBoost":
-        # Generate features for XGBoost
         df = generate_features(df, token=TOKEN)
         print(df.tail())
 
-        # Prepare features and target
-        feature_cols = [f'f{i}' for i in range(81)]  # 81 features as per requirement
+        feature_cols = [f'f{i}' for i in range(81)]
         X_train = df[[f'{col}_{TOKEN}_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] +
                      [f'{col}_BTCUSDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] +
                      ['hour_of_day']]
-        X_train.columns = feature_cols  # Rename to f0, f1, ..., f80
+        X_train.columns = feature_cols
         y_train = df['close'].shift(-1).dropna()
-        X_train = X_train.iloc[:-1]  # Align with y_train
+        X_train = X_train.iloc[:-1]
 
         print(f"Training data shape: {X_train.shape}, {y_train.shape}")
 
-        # Train XGBoost model
         dtrain = xgb.DMatrix(X_train, label=y_train)
         params = {
             'objective': 'reg:squarederror',
@@ -162,17 +153,15 @@ def train_model(timeframe):
         }
         model = xgb.train(params, dtrain, num_boost_round=1000, early_stopping_rounds=10)
 
-        # Save the model using pickle
         os.makedirs(os.path.dirname(model_file_path), exist_ok=True)
         with open(model_file_path, "wb") as f:
             pickle.dump(model, f)
         print(f"Trained XGBoost model saved to {model_file_path}")
     else:
-        # Original model training logic
+        # Original logic
         print(df.tail())
         y_train = df['close'].shift(-1).dropna().values
         X_train = df[:-1]
-
         print(f"Training data shape: {X_train.shape}, {y_train.shape}")
 
         if MODEL == "LinearRegression":
@@ -193,11 +182,9 @@ def train_model(timeframe):
         print(f"Trained model saved to {model_file_path}")
 
 def get_inference(token, timeframe, region, data_provider):
-    """Load model and predict current price."""
     with open(model_file_path, "rb") as f:
         loaded_model = pickle.load(f)
 
-    # Get current price data
     if data_provider == "coingecko":
         current_df = download_coingecko_current_day_data(token, CG_API_KEY)
     else:
@@ -206,7 +193,6 @@ def get_inference(token, timeframe, region, data_provider):
     X_new = generate_features(X_new, token=token)
     
     if MODEL == "XGBoost":
-        # Prepare inference data for XGBoost
         feature_cols = [f'f{i}' for i in range(81)]
         X_new = X_new[[f'{col}_{token}_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] +
                       [f'{col}_BTCUSDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] +
@@ -220,9 +206,7 @@ def get_inference(token, timeframe, region, data_provider):
         current_price_pred = loaded_model.predict(dnew)
         return current_price_pred[0]
     else:
-        # Original inference logic
         print(X_new.tail())
         print(X_new.shape)
-
         current_price_pred = loaded_model.predict(X_new)
         return current_price_pred[0]

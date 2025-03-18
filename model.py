@@ -91,7 +91,7 @@ def format_data(files, data_provider, output_path):
             print("No data processed for CoinGecko")
 
 def load_frame(frame, timeframe):
-    print(f"Loading data...")
+    print(f"Loading data with timeframe {timeframe}...")
     df = frame.loc[:, ['open', 'high', 'low', 'close']].dropna()
     df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].apply(pd.to_numeric)
     
@@ -114,9 +114,11 @@ def load_frame(frame, timeframe):
 
 def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER):
     print(f"Generating features for token: {token}, data_provider: {data_provider}")
+    eth_df = df.copy()
+    print(f"ETH data shape before processing: {eth_df.shape}")
+    print(f"ETH data columns: {eth_df.columns.tolist()}")
+
     if token == "ETHUSDT":
-        eth_df = df.copy()
-        print(f"ETH data shape before merge: {eth_df.shape}")
         print("Downloading BTC data...")
         btc_files = download_data("BTC", TRAINING_DAYS, REGION, data_provider)
         format_data(btc_files, data_provider, btc_price_data_path)
@@ -134,29 +136,38 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER):
         df = eth_df.join(btc_df, how="inner")
         if df.empty:
             raise ValueError("Failed to join ETH and BTC data: resulting DataFrame is empty")
-        print(f"Combined ETH and BTC data: {df.shape}")
+        print(f"Combined ETH and BTC data shape: {df.shape}")
+        print(f"Combined columns: {df.columns.tolist()}")
 
+    # 生成滞后特征
     for lag in range(1, 11):
         for col in ['open', 'high', 'low', 'close']:
-            df[f'{col}_{token}_lag{lag}'] = df[col].shift(lag)
+            col_name = f'{col}_{token}_lag{lag}'
+            df[col_name] = df[col].shift(lag)
+            print(f"Generated {col_name}")
             if token == "ETHUSDT":
-                if f'{col}_BTCUSDT' not in df.columns:
-                    raise ValueError(f"Column {col}_BTCUSDT not found in DataFrame after join")
-                df[f'{col}_BTCUSDT_lag{lag}'] = df[f'{col}_BTCUSDT'].shift(lag)
+                btc_col = f'{col}_BTCUSDT'
+                btc_lag_col = f'{col}_BTCUSDT_lag{lag}'
+                if btc_col not in df.columns:
+                    raise ValueError(f"Column {btc_col} not found in DataFrame after join")
+                df[btc_lag_col] = df[btc_col].shift(lag)
+                print(f"Generated {btc_lag_col}")
 
     df['hour_of_day'] = df.index.hour
     df = df.dropna()
-    print(f"Features generated: {df.columns.tolist()}")
+    print(f"Final features generated: {df.columns.tolist()}")
+    print(f"Final data shape after dropna: {df.shape}")
     return df
 
 def train_model(timeframe):
     print(f"Starting train_model with timeframe: {timeframe}")
     eth_price_data = pd.read_csv(eth_price_data_path)
     df = load_frame(eth_price_data, timeframe)
-    print(f"ETH data loaded: {df.shape}")
+    print(f"ETH data loaded: {df.shape}, columns: {df.columns.tolist()}")
 
     if MODEL == "XGBoost":
         df = generate_features(df, token=TOKEN, data_provider=DATA_PROVIDER)
+        print("DataFrame after generate_features:")
         print(df.tail())
 
         feature_cols = [f'f{i}' for i in range(81)]

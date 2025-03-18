@@ -1,12 +1,13 @@
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
 
 app_base_path = os.getenv("APP_BASE_PATH", default=os.getcwd())
 data_base_path = os.path.join(app_base_path, "data")
 model_file_path = os.path.join(data_base_path, "model.pkl")
+eth_price_data_path = os.path.join(data_base_path, "eth_price_data.csv")
+btc_price_data_path = os.path.join(data_base_path, "btc_price_data.csv")
 
 TOKEN = os.getenv("TOKEN").upper()
 TRAINING_DAYS = os.getenv("TRAINING_DAYS")

@@ -3,6 +3,9 @@ import os
 import pickle
 from zipfile import ZipFile
 import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import numpy as np
 from sklearn.kernel_ridge import KernelRidge
 from sklearn.linear_model import BayesianRidge, LinearRegression
 from sklearn.svm import SVR
@@ -103,11 +106,9 @@ def format_data(files_btc, files_eth, data_provider):
 
 def load_frame(frame, timeframe):
     print(f"Loading data with timeframe {timeframe}...")
-    # Adjust for raw Binance data column names
     df = frame.loc[:, ['open', 'high', 'low', 'close']].dropna()
     df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].apply(pd.to_numeric)
     
-    # Use end_time for Binance current day data
     if 'end_time' in frame.columns:
         df.index = pd.to_datetime(frame['end_time'] + 1, unit='ms', errors='coerce')
     else:
@@ -133,22 +134,27 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER):
         'close': f'close_{token}USDT'
     })
 
-    # Load historical data to append for sufficient lag
+    # Load historical data for sufficient lag
     if os.path.exists(training_price_data_path):
         hist_df = pd.read_csv(training_price_data_path, index_col='date', parse_dates=True)
-        hist_df = hist_df[[f'{col}_{token}USDT' for col in ['open', 'high', 'low', 'close']]]
-        df = pd.concat([hist_df, df], axis=0)
+        hist_df = hist_df.tail(14400)  # Last 10 days for efficiency
+        hist_df_eth = hist_df[[f'{col}_{token}USDT' for col in ['open', 'high', 'low', 'close']]]
+        hist_df_btc = hist_df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]]
+        df = pd.concat([hist_df_eth, df], axis=0)
 
-    # Generate lag features
-    for pair in [f"{token}USDT", "BTCUSDT"]:
-        if pair == "BTCUSDT" and not any(col.endswith('_BTCUSDT') for col in df.columns):
-            print("BTC data missing, loading from training_price_data_path...")
-            combined_df = pd.read_csv(training_price_data_path, index_col='date', parse_dates=True)
-            df = pd.concat([df, combined_df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]]], axis=1)
-        
-        for metric in ["open", "high", "low", "close"]:
-            for lag in range(1, 11):
-                df[f"{metric}_{pair}_lag{lag}"] = df[f"{metric}_{pair}"].shift(lag)
+    # Generate ETH lag features
+    for metric in ["open", "high", "low", "close"]:
+        for lag in range(1, 11):
+            df[f"{metric}_{token}USDT_lag{lag}"] = df[f"{metric}_{token}USDT"].shift(lag)
+
+    # Add BTC data and generate BTC lag features
+    if not any(col.endswith('_BTCUSDT') for col in df.columns):
+        print("BTC data missing, adding from historical data...")
+        df = pd.concat([df, hist_df_btc], axis=1)
+    
+    for metric in ["open", "high", "low", "close"]:
+        for lag in range(1, 11):
+            df[f"{metric}_BTCUSDT_lag{lag}"] = df[f"{metric}_BTCUSDT"].shift(lag)
 
     df['hour_of_day'] = df.index.hour
     df = df.dropna()
@@ -176,21 +182,45 @@ def train_model(timeframe):
         missing_cols = [col for col in required_cols if col not in df.columns]
         if missing_cols:
             raise ValueError(f"Missing columns in DataFrame: {missing_cols}")
-        X_train = df[required_cols]
-        X_train.columns = feature_cols
-        y_train = df[f'close_{TOKEN}USDT'].shift(-1).dropna()
-        X_train = X_train.iloc[:-1]
+        X = df[required_cols]
+        X.columns = feature_cols
+        y = df[f'close_{TOKEN}USDT'].shift(-1).dropna()
+        X = X.iloc[:-1]
+
+        # Split into training and validation sets
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=False)
 
         print(f"Training data shape: {X_train.shape}, {y_train.shape}")
+        print(f"Validation data shape: {X_val.shape}, {y_val.shape}")
 
         dtrain = xgb.DMatrix(X_train, label=y_train)
+        dval = xgb.DMatrix(X_val, label=y_val)
         params = {
             'objective': 'reg:squarederror',
             'eval_metric': 'rmse',
             'eta': 0.05,
             'max_depth': 6
         }
-        model = xgb.train(params, dtrain, num_boost_round=1000)
+        model = xgb.train(params, dtrain, num_boost_round=1000, evals=[(dval, 'validation')], early_stopping_rounds=10)
+
+        # Calculate and print performance metrics
+        y_train_pred = model.predict(dtrain)
+        y_val_pred = model.predict(dval)
+
+        train_mae = mean_absolute_error(y_train, y_train_pred)
+        train_rmse = np.sqrt(mean_squared_error(y_train, y_train_pred))
+        train_r2 = r2_score(y_train, y_train_pred)
+
+        val_mae = mean_absolute_error(y_val, y_val_pred)
+        val_rmse = np.sqrt(mean_squared_error(y_val, y_val_pred))
+        val_r2 = r2_score(y_val, y_val_pred)
+
+        print(f"Training MAE: {train_mae:.4f}")
+        print(f"Training RMSE: {train_rmse:.4f}")
+        print(f"Training R²: {train_r2:.4f}")
+        print(f"Validation MAE: {val_mae:.4f}")
+        print(f"Validation RMSE: {val_rmse:.4f}")
+        print(f"Validation R²: {val_r2:.4f}")
 
         os.makedirs(os.path.dirname(model_file_path), exist_ok=True)
         with open(model_file_path, "wb") as f:
@@ -214,6 +244,17 @@ def train_model(timeframe):
             raise ValueError("Unsupported model")
         
         model.fit(X_train, y_train)
+        
+        # Calculate and print performance metrics for non-XGBoost models
+        y_train_pred = model.predict(X_train)
+        train_mae = mean_absolute_error(y_train, y_train_pred)
+        train_rmse = np.sqrt(mean_squared_error(y_train, y_train_pred))
+        train_r2 = r2_score(y_train, y_train_pred)
+        
+        print(f"Training MAE: {train_mae:.4f}")
+        print(f"Training RMSE: {train_rmse:.4f}")
+        print(f"Training R²: {train_r2:.4f}")
+
         os.makedirs(os.path.dirname(model_file_path), exist_ok=True)
         with open(model_file_path, "wb") as f:
             pickle.dump(model, f)
@@ -224,10 +265,32 @@ def get_inference(token, timeframe, region, data_provider):
         loaded_model = pickle.load(f)
 
     if data_provider == "coingecko":
-        current_df = download_coingecko_current_day_data(token, CG_API_KEY)
+        current_df_eth = download_coingecko_current_day_data(token, CG_API_KEY)
+        current_df_btc = download_coingecko_current_day_data("bitcoin", CG_API_KEY)
     else:
-        current_df = download_binance_current_day_data(f"{token}USDT", region)
-    X_new = load_frame(current_df, timeframe)
+        current_df_eth = download_binance_current_day_data(f"{token}USDT", region)
+        current_df_btc = download_binance_current_day_data("BTCUSDT", region)
+    
+    print(f"Raw ETH data shape: {current_df_eth.shape}, columns: {current_df_eth.columns.tolist()}")
+    print(f"Raw BTC data shape: {current_df_btc.shape}, columns: {current_df_btc.columns.tolist()}")
+
+    X_new_eth = load_frame(current_df_eth, timeframe)
+    X_new_btc = load_frame(current_df_btc, timeframe)
+    
+    X_new_eth = X_new_eth.rename(columns={
+        'open': f'open_{token}USDT',
+        'high': f'high_{token}USDT',
+        'low': f'low_{token}USDT',
+        'close': f'close_{token}USDT'
+    })
+    X_new_btc = X_new_btc.rename(columns={
+        'open': 'open_BTCUSDT',
+        'high': 'high_BTCUSDT',
+        'low': 'low_BTCUSDT',
+        'close': 'close_BTCUSDT'
+    })
+
+    X_new = pd.concat([X_new_eth, X_new_btc], axis=1)
     X_new = generate_features(X_new, token=token, data_provider=data_provider)
     
     if MODEL == "XGBoost":

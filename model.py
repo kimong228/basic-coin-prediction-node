@@ -8,7 +8,7 @@ from sklearn.linear_model import BayesianRidge, LinearRegression
 from sklearn.svm import SVR
 import xgboost as xgb
 from updater import download_binance_daily_data, download_binance_current_day_data, download_coingecko_data, download_coingecko_current_day_data
-from config import data_base_path, model_file_path, TOKEN, MODEL, CG_API_KEY, TRAINING_DAYS, REGION
+from config import data_base_path, model_file_path, TOKEN, MODEL, CG_API_KEY, TRAINING_DAYS, REGION, DATA_PROVIDER
 
 binance_data_path = os.path.join(data_base_path, "binance")
 coingecko_data_path = os.path.join(data_base_path, "coingecko")
@@ -17,12 +17,12 @@ btc_price_data_path = os.path.join(data_base_path, "btc_price_data.csv")
 
 def download_data_binance(token, training_days, region):
     files = download_binance_daily_data(f"{token}USDT", training_days, region, binance_data_path)
-    print(f"Downloaded {len(files)} new files")
+    print(f"Downloaded {len(files)} new files for {token}USDT")
     return files
 
 def download_data_coingecko(token, training_days):
     files = download_coingecko_data(token, training_days, coingecko_data_path, CG_API_KEY)
-    print(f"Downloaded {len(files)} new files")
+    print(f"Downloaded {len(files)} new files for {token}")
     return files
 
 def download_data(token, training_days, region, data_provider):
@@ -40,8 +40,10 @@ def format_data(files, data_provider, output_path):
     
     print(f"Files received: {files}")
     
+    # 修正 TOKEN 的使用
+    token_prefix = os.path.basename(files[0]).split('-')[0] if files else "UNKNOWN"
     if data_provider == "binance":
-        files = [f for f in files if os.path.basename(f).startswith(f"{TOKEN}USDT")]
+        files = [f for f in files if os.path.basename(f).startswith(token_prefix)]
     elif data_provider == "coingecko":
         files = [f for f in files if os.path.basename(f).endswith(".json")]
 
@@ -111,12 +113,13 @@ def load_frame(frame, timeframe):
     df.sort_index(inplace=True)
     return df.resample(f'{timeframe}', label='right', closed='right', origin='end').mean()
 
-def generate_features(df, token="ETHUSDT", data_provider="binance"):
+def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER):
     """Generate lag features for ETH and BTC"""
+    print(f"Generating features for token: {token}, data_provider: {data_provider}")
     if token == "ETHUSDT":
         eth_df = df.copy()
         print("Downloading BTC data...")
-        btc_files = download_data_binance("BTC", TRAINING_DAYS, REGION, data_provider)
+        btc_files = download_data("BTC", TRAINING_DAYS, REGION, data_provider)
         format_data(btc_files, data_provider, btc_price_data_path)
         if not os.path.exists(btc_price_data_path):
             raise FileNotFoundError(f"BTC data file not found at {btc_price_data_path}")
@@ -141,6 +144,7 @@ def generate_features(df, token="ETHUSDT", data_provider="binance"):
 
     df['hour_of_day'] = df.index.hour
     df = df.dropna()
+    print(f"Features generated: {df.columns.tolist()}")
     return df
 
 def train_model(timeframe):
@@ -148,7 +152,7 @@ def train_model(timeframe):
     df = load_frame(eth_price_data, timeframe)
 
     if MODEL == "XGBoost":
-        df = generate_features(df, token=TOKEN, data_provider="binance")
+        df = generate_features(df, token=TOKEN, data_provider=DATA_PROVIDER)
         print(df.tail())
 
         feature_cols = [f'f{i}' for i in range(81)]

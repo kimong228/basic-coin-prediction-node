@@ -89,7 +89,7 @@ def format_data(files_btc, files_eth, data_provider):
     price_df_eth = price_df_eth.rename(columns=lambda x: f"{x}_ETHUSDT")
     price_df = pd.concat([price_df_btc, price_df_eth], axis=1)
 
-    # Generate features as in model_ref.py
+    # Generate features
     for pair in ["ETHUSDT", "BTCUSDT"]:
         for metric in ["open", "high", "low", "close"]:
             for lag in range(1, 11):
@@ -103,52 +103,43 @@ def format_data(files_btc, files_eth, data_provider):
 
 def load_frame(frame, timeframe):
     print(f"Loading data with timeframe {timeframe}...")
-    df = frame.loc[:, ['open', 'high', 'low', 'close']].dropna()
-    df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].apply(pd.to_numeric)
+    # Use suffixed column names consistent with format_data
+    df = frame.loc[:, ['open_ETHUSDT', 'high_ETHUSDT', 'low_ETHUSDT', 'close_ETHUSDT']].dropna()
+    df[['open_ETHUSDT', 'high_ETHUSDT', 'low_ETHUSDT', 'close_ETHUSDT']] = df[['open_ETHUSDT', 'high_ETHUSDT', 'low_ETHUSDT', 'close_ETHUSDT']].apply(pd.to_numeric)
     
-    df['date'] = frame['date']
-    try:
-        df['date'] = pd.to_numeric(df['date'])
-        if df['date'].max() > 4102444800000:  # 超过 2100-01-01 的毫秒时间戳
-            df['date'] = df['date'] // 1000
-        df['date'] = pd.to_datetime(df['date'], unit='ms', errors='coerce')
-    except ValueError:
-        df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    df.index = pd.to_datetime(df.index, errors='coerce')  # Ensure index is datetime
+    df = df.dropna(subset=['open_ETHUSDT'])  # Ensure no NaN in key column
     
-    df = df.dropna(subset=['date'])
     if df.empty:
-        raise ValueError("No valid dates found in the data after cleaning.")
+        raise ValueError("No valid data found after cleaning.")
     
-    df.set_index('date', inplace=True)
     df.sort_index(inplace=True)
     return df.resample(f'{timeframe}', label='right', closed='right', origin='end').mean()
 
 def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER):
     print(f"Generating features for token: {token}, data_provider: {data_provider}")
     eth_df = df.copy()
-    print(f"ETH data shape before processing: {eth_df.shape}")
-    print(f"ETH data columns: {eth_df.columns.tolist()}")
+    print(f"Data shape before processing: {eth_df.shape}")
+    print(f"Data columns: {eth_df.columns.tolist()}")
 
     if token == "ETHUSDT":
-        print("Downloading BTC data...")
-        btc_files = download_data("BTC", TRAINING_DAYS, REGION, data_provider)
-        format_data(btc_files, [], data_provider)  # Only BTC data
-        if not os.path.exists(training_price_data_path):
-            raise FileNotFoundError(f"Training data file not found at {training_price_data_path}")
-        combined_df = pd.read_csv(training_price_data_path, index_col='date', parse_dates=True)
-        df = combined_df
-        print(f"Combined data loaded: {df.shape}, columns: {df.columns.tolist()}")
+        print("Ensuring BTC data is included...")
+        if not any(col.endswith('_BTCUSDT') for col in eth_df.columns):
+            print("BTC data missing, loading from training_price_data_path...")
+            combined_df = pd.read_csv(training_price_data_path, index_col='date', parse_dates=True)
+            df = combined_df
+            print(f"Combined data loaded: {df.shape}, columns: {df.columns.tolist()}")
 
     for lag in range(1, 11):
         for col in ['open', 'high', 'low', 'close']:
             col_name = f'{col}_{token}_lag{lag}'
-            df[col_name] = df[col].shift(lag)
+            df[col_name] = df[f'{col}_{token}'].shift(lag)
             print(f"Generated {col_name}")
             if token == "ETHUSDT":
                 btc_col = f'{col}_BTCUSDT'
                 btc_lag_col = f'{col}_BTCUSDT_lag{lag}'
                 if btc_col not in df.columns:
-                    raise ValueError(f"Column {btc_col} not found in DataFrame after join")
+                    raise ValueError(f"Column {btc_col} not found in DataFrame")
                 df[btc_lag_col] = df[btc_col].shift(lag)
                 print(f"Generated {btc_lag_col}")
 
@@ -160,12 +151,10 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER):
 
 def train_model(timeframe):
     print(f"Starting train_model with timeframe: {timeframe}")
-    # Download and format data for both BTC and ETH
-    files_btc = download_data("BTC", TRAINING_DAYS, REGION, DATA_PROVIDER)
-    files_eth = download_data("ETH", TRAINING_DAYS, REGION, DATA_PROVIDER)
-    format_data(files_btc, files_eth, DATA_PROVIDER)
-
-    # Load combined data
+    # Load existing combined data
+    if not os.path.exists(training_price_data_path):
+        raise FileNotFoundError(f"Training data file not found at {training_price_data_path}. Run update_data first.")
+    
     price_data = pd.read_csv(training_price_data_path, index_col='date', parse_dates=True)
     df = load_frame(price_data, timeframe)
     print(f"Loaded data: {df.shape}, columns: {df.columns.tolist()}")
@@ -184,7 +173,7 @@ def train_model(timeframe):
             raise ValueError(f"Missing columns in DataFrame: {missing_cols}")
         X_train = df[required_cols]
         X_train.columns = feature_cols
-        y_train = df['close'].shift(-1).dropna()
+        y_train = df[f'close_{TOKEN}'].shift(-1).dropna()  # Use close_ETHUSDT as target
         X_train = X_train.iloc[:-1]
 
         print(f"Training data shape: {X_train.shape}, {y_train.shape}")
@@ -204,7 +193,7 @@ def train_model(timeframe):
         print(f"Trained XGBoost model saved to {model_file_path}")
     else:
         print(df.tail())
-        y_train = df['close'].shift(-1).dropna().values
+        y_train = df[f'close_{TOKEN}'].shift(-1).dropna().values
         X_train = df[:-1]
         print(f"Training data shape: {X_train.shape}, {y_train.shape}")
 

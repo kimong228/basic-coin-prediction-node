@@ -121,16 +121,22 @@ def generate_features(df, token="ETHUSDT", data_provider="binance"):
         if not os.path.exists(btc_price_data_path):
             raise FileNotFoundError(f"BTC data file not found at {btc_price_data_path}")
         btc_df = pd.read_csv(btc_price_data_path)
+        if btc_df.empty:
+            raise ValueError(f"BTC data file {btc_price_data_path} is empty")
         print(f"BTC data loaded: {btc_df.shape}")
         btc_df = load_frame(btc_df, timeframe)
         btc_df.columns = [f"{col}_BTCUSDT" for col in btc_df.columns]
         df = eth_df.join(btc_df, how="inner")
+        if df.empty:
+            raise ValueError("Failed to join ETH and BTC data: resulting DataFrame is empty")
         print(f"Combined ETH and BTC data: {df.shape}")
 
     for lag in range(1, 11):
         for col in ['open', 'high', 'low', 'close']:
             df[f'{col}_{token}_lag{lag}'] = df[col].shift(lag)
             if token == "ETHUSDT":
+                if f'{col}_BTCUSDT' not in df.columns:
+                    raise ValueError(f"Column {col}_BTCUSDT not found in DataFrame")
                 df[f'{col}_BTCUSDT_lag{lag}'] = df[f'{col}_BTCUSDT'].shift(lag)
 
     df['hour_of_day'] = df.index.hour

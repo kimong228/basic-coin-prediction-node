@@ -3,7 +3,6 @@ import os
 import pickle
 from zipfile import ZipFile
 import pandas as pd
-from sklearn.model_selection import train_test_split
 from sklearn.kernel_ridge import KernelRidge
 from sklearn.linear_model import BayesianRidge, LinearRegression
 from sklearn.svm import SVR
@@ -104,12 +103,17 @@ def format_data(files_btc, files_eth, data_provider):
 
 def load_frame(frame, timeframe):
     print(f"Loading data with timeframe {timeframe}...")
-    df = frame.loc[:, ['open_ETHUSDT', 'high_ETHUSDT', 'low_ETHUSDT', 'close_ETHUSDT']].dropna()
-    df[['open_ETHUSDT', 'high_ETHUSDT', 'low_ETHUSDT', 'close_ETHUSDT']] = df[['open_ETHUSDT', 'high_ETHUSDT', 'low_ETHUSDT', 'close_ETHUSDT']].apply(pd.to_numeric)
+    # Adjust for raw Binance data column names
+    df = frame.loc[:, ['open', 'high', 'low', 'close']].dropna()
+    df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].apply(pd.to_numeric)
     
-    df.index = pd.to_datetime(df.index, errors='coerce')
-    df = df.dropna(subset=['open_ETHUSDT'])
+    # Use end_time for Binance current day data
+    if 'end_time' in frame.columns:
+        df.index = pd.to_datetime(frame['end_time'] + 1, unit='ms', errors='coerce')
+    else:
+        df.index = pd.to_datetime(df.index, errors='coerce')
     
+    df = df.dropna(subset=['open'])
     if df.empty:
         raise ValueError("No valid data found after cleaning.")
     
@@ -121,20 +125,34 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER):
     print(f"Data shape before processing: {df.shape}")
     print(f"Data columns: {df.columns.tolist()}")
 
-    if token == "ETHUSDT" and not any(col.endswith('_BTCUSDT') for col in df.columns):
-        print("BTC data missing, loading from training_price_data_path...")
-        combined_df = pd.read_csv(training_price_data_path, index_col='date', parse_dates=True)
-        df = combined_df
-        print(f"Combined data loaded: {df.shape}, columns: {df.columns.tolist()}")
+    # Rename columns to match training data
+    df = df.rename(columns={
+        'open': f'open_{token}USDT',
+        'high': f'high_{token}USDT',
+        'low': f'low_{token}USDT',
+        'close': f'close_{token}USDT'
+    })
 
-    required_cols = [f'{col}_{token}USDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] + \
-                    [f'{col}_BTCUSDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] + \
-                    ['hour_of_day']
-    missing_cols = [col for col in required_cols if col not in df.columns]
-    if missing_cols:
-        raise ValueError(f"Missing columns in DataFrame during inference: {missing_cols}")
-    
-    print(f"Features verified: {df.columns.tolist()}")
+    # Load historical data to append for sufficient lag
+    if os.path.exists(training_price_data_path):
+        hist_df = pd.read_csv(training_price_data_path, index_col='date', parse_dates=True)
+        hist_df = hist_df[[f'{col}_{token}USDT' for col in ['open', 'high', 'low', 'close']]]
+        df = pd.concat([hist_df, df], axis=0)
+
+    # Generate lag features
+    for pair in [f"{token}USDT", "BTCUSDT"]:
+        if pair == "BTCUSDT" and not any(col.endswith('_BTCUSDT') for col in df.columns):
+            print("BTC data missing, loading from training_price_data_path...")
+            combined_df = pd.read_csv(training_price_data_path, index_col='date', parse_dates=True)
+            df = pd.concat([df, combined_df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]]], axis=1)
+        
+        for metric in ["open", "high", "low", "close"]:
+            for lag in range(1, 11):
+                df[f"{metric}_{pair}_lag{lag}"] = df[f"{metric}_{pair}"].shift(lag)
+
+    df['hour_of_day'] = df.index.hour
+    df = df.dropna()
+    print(f"Features generated: {df.columns.tolist()}")
     print(f"Final data shape: {df.shape}")
     return df
 
@@ -158,27 +176,21 @@ def train_model(timeframe):
         missing_cols = [col for col in required_cols if col not in df.columns]
         if missing_cols:
             raise ValueError(f"Missing columns in DataFrame: {missing_cols}")
-        X = df[required_cols]
-        X.columns = feature_cols
-        y = df[f'close_{TOKEN}USDT'].shift(-1).dropna()
-        X = X.iloc[:-1]
-
-        # Split into training and validation sets
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=False)
+        X_train = df[required_cols]
+        X_train.columns = feature_cols
+        y_train = df[f'close_{TOKEN}USDT'].shift(-1).dropna()
+        X_train = X_train.iloc[:-1]
 
         print(f"Training data shape: {X_train.shape}, {y_train.shape}")
-        print(f"Validation data shape: {X_val.shape}, {y_val.shape}")
 
         dtrain = xgb.DMatrix(X_train, label=y_train)
-        dval = xgb.DMatrix(X_val, label=y_val)
         params = {
             'objective': 'reg:squarederror',
             'eval_metric': 'rmse',
             'eta': 0.05,
             'max_depth': 6
         }
-        # Use evals for early stopping
-        model = xgb.train(params, dtrain, num_boost_round=1000, evals=[(dval, 'validation')], early_stopping_rounds=10)
+        model = xgb.train(params, dtrain, num_boost_round=1000)
 
         os.makedirs(os.path.dirname(model_file_path), exist_ok=True)
         with open(model_file_path, "wb") as f:

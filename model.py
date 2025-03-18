@@ -12,8 +12,8 @@ from config import data_base_path, model_file_path, TOKEN, MODEL, CG_API_KEY, TR
 
 binance_data_path = os.path.join(data_base_path, "binance")
 coingecko_data_path = os.path.join(data_base_path, "coingecko")
-eth_price_data_path = os.path.join(data_base_path, "eth_price_data.csv")  # ETH 数据文件
-btc_price_data_path = os.path.join(data_base_path, "btc_price_data.csv")  # BTC 数据文件
+eth_price_data_path = os.path.join(data_base_path, "eth_price_data.csv")
+btc_price_data_path = os.path.join(data_base_path, "btc_price_data.csv")
 
 def download_data_binance(token, training_days, region):
     files = download_binance_daily_data(f"{token}USDT", training_days, region, binance_data_path)
@@ -35,15 +35,17 @@ def download_data(token, training_days, region, data_provider):
 
 def format_data(files, data_provider, output_path):
     if not files:
-        print("Already up to date")
+        print("No new files to process")
         return
     
+    # 使用传入的 files，而不是重新扫描目录
     if data_provider == "binance":
-        files = sorted([x for x in os.listdir(binance_data_path) if x in files])
+        files = [f for f in files if f.startswith(f"{TOKEN}USDT")]
     elif data_provider == "coingecko":
-        files = sorted([x for x in os.listdir(coingecko_data_path) if x.endswith(".json")])
+        files = [f for f in files if f.endswith(".json")]
 
     if len(files) == 0:
+        print("No matching files found")
         return
 
     price_df = pd.DataFrame()
@@ -63,7 +65,11 @@ def format_data(files, data_provider, output_path):
             df.index = [pd.Timestamp(x + 1, unit="ms").to_datetime64() for x in df["end_time"]]
             df.index.name = "date"
             price_df = pd.concat([price_df, df])
-        price_df.sort_index().to_csv(output_path)
+        if not price_df.empty:
+            price_df.sort_index().to_csv(output_path)
+            print(f"Data saved to {output_path}")
+        else:
+            print("No data processed for Binance")
     elif data_provider == "coingecko":
         for file in files:
             with open(os.path.join(coingecko_data_path, file), "r") as f:
@@ -75,7 +81,11 @@ def format_data(files, data_provider, output_path):
                 df.drop(columns=["timestamp"], inplace=True)
                 df.set_index("date", inplace=True)
                 price_df = pd.concat([price_df, df])
-        price_df.sort_index().to_csv(output_path)
+        if not price_df.empty:
+            price_df.sort_index().to_csv(output_path)
+            print(f"Data saved to {output_path}")
+        else:
+            print("No data processed for CoinGecko")
 
 def load_frame(frame, timeframe):
     print(f"Loading data...")
@@ -103,7 +113,6 @@ def generate_features(df, token="ETHUSDT"):
     """Generate lag features for ETH and BTC"""
     if token == "ETHUSDT":
         eth_df = df.copy()
-        # 下载并格式化 BTC 数据
         btc_files = download_data_binance("BTC", TRAINING_DAYS, REGION, "binance")
         format_data(btc_files, "binance", btc_price_data_path)
         btc_df = pd.read_csv(btc_price_data_path)
@@ -111,22 +120,17 @@ def generate_features(df, token="ETHUSDT"):
         btc_df.columns = [f"{col}_BTCUSDT" for col in btc_df.columns]
         df = eth_df.join(btc_df, how="inner")
 
-    # Generate lag features (1 to 10) for OHLC
     for lag in range(1, 11):
         for col in ['open', 'high', 'low', 'close']:
             df[f'{col}_{token}_lag{lag}'] = df[col].shift(lag)
             if token == "ETHUSDT":
                 df[f'{col}_BTCUSDT_lag{lag}'] = df[f'{col}_BTCUSDT'].shift(lag)
 
-    # Add hour_of_day feature
     df['hour_of_day'] = df.index.hour
-
-    # Drop rows with NaN values due to shifting
     df = df.dropna()
     return df
 
 def train_model(timeframe):
-    # Load ETH price data
     eth_price_data = pd.read_csv(eth_price_data_path)
     df = load_frame(eth_price_data, timeframe)
 
@@ -158,7 +162,6 @@ def train_model(timeframe):
             pickle.dump(model, f)
         print(f"Trained XGBoost model saved to {model_file_path}")
     else:
-        # Original logic
         print(df.tail())
         y_train = df['close'].shift(-1).dropna().values
         X_train = df[:-1]

@@ -1,14 +1,15 @@
 import json
 from flask import Flask, Response
 from model import download_data, format_data, train_model, get_inference
-from config import model_file_path, TOKEN, TIMEFRAME, TRAINING_DAYS, REGION, DATA_PROVIDER, eth_price_data_path
+from config import model_file_path, TOKEN, TIMEFRAME, TRAINING_DAYS, REGION, DATA_PROVIDER
 
 app = Flask(__name__)
 
 def update_data():
     """Download price data, format data and train model."""
-    files = download_data(TOKEN, TRAINING_DAYS, REGION, DATA_PROVIDER)
-    format_data(files, DATA_PROVIDER, eth_price_data_path)  # 传递文件列表和输出路径
+    files_btc = download_data("BTC", TRAINING_DAYS, REGION, DATA_PROVIDER)
+    files_eth = download_data("ETH", TRAINING_DAYS, REGION, DATA_PROVIDER)
+    format_data(files_btc, files_eth, DATA_PROVIDER)
     train_model(TIMEFRAME)
 
 @app.route("/inference/<string:token>")

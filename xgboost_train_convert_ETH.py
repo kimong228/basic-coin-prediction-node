@@ -8,7 +8,7 @@ from onnxmltools.convert import convert_xgboost
 from onnxmltools.convert.common.data_types import FloatTensorType
 
 # Load the data
-data_path = './data/ETH/ETHUSDT_1h_spot_forecast_training.csv'
+data_path = './ETHUSDT_1h_spot_forecast_training.csv'
 data = pd.read_csv(data_path)
 
 # Preprocess the data

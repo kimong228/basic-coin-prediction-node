@@ -8,7 +8,7 @@ app = Flask(__name__)
 def update_data():
     """Download price data, format data and train model."""
     files = download_data(TOKEN, TRAINING_DAYS, REGION, DATA_PROVIDER)
-    format_data(files, DATA_PROVIDER, eth_price_data_path)  # 使用 ETH 数据路径
+    format_data(files, DATA_PROVIDER, eth_price_data_path)  # 传递文件列表和输出路径
     train_model(TIMEFRAME)
 
 @app.route("/inference/<string:token>")

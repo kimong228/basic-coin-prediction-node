@@ -76,4 +76,165 @@ def format_data(files, data_provider, output_path):
         for file in files:
             file_path = os.path.join(coingecko_data_path, file) if not os.path.isabs(file) else file
             with open(file_path, "r") as f:
-                data 
+                data = json.load(f)
+                df = pd.DataFrame(data)
+                df.columns = ["timestamp", "open", "high", "low", "close"]
+                print(f"Processing {file}, timestamp sample: {df['timestamp'].head(5)}")
+                df["date"] = pd.to_datetime(df["timestamp"], unit="ms")
+                df.drop(columns=["timestamp"], inplace=True)
+                df.set_index("date", inplace=True)
+                price_df = pd.concat([price_df, df])
+        if not price_df.empty:
+            price_df.sort_index().to_csv(output_path)
+            print(f"Data saved to {output_path}")
+        else:
+            print("No data processed for CoinGecko")
+
+def load_frame(frame, timeframe):
+    print(f"Loading data...")
+    df = frame.loc[:, ['open', 'high', 'low', 'close']].dropna()
+    df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].apply(pd.to_numeric)
+    
+    df['date'] = frame['date']
+    try:
+        df['date'] = pd.to_numeric(df['date'])
+        if df['date'].max() > 4102444800000:  # 超过 2100-01-01 的毫秒时间戳
+            df['date'] = df['date'] // 1000
+        df['date'] = pd.to_datetime(df['date'], unit='ms', errors='coerce')
+    except ValueError:
+        df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    
+    df = df.dropna(subset=['date'])
+    if df.empty:
+        raise ValueError("No valid dates found in the data after cleaning.")
+    
+    df.set_index('date', inplace=True)
+    df.sort_index(inplace=True)
+    return df.resample(f'{timeframe}', label='right', closed='right', origin='end').mean()
+
+def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER):
+    print(f"Generating features for token: {token}, data_provider: {data_provider}")
+    if token == "ETHUSDT":
+        eth_df = df.copy()
+        print(f"ETH data shape before merge: {eth_df.shape}")
+        print("Downloading BTC data...")
+        btc_files = download_data("BTC", TRAINING_DAYS, REGION, data_provider)
+        format_data(btc_files, data_provider, btc_price_data_path)
+        if not os.path.exists(btc_price_data_path):
+            raise FileNotFoundError(f"BTC data file not found at {btc_price_data_path}")
+        btc_df = pd.read_csv(btc_price_data_path)
+        if btc_df.empty:
+            raise ValueError(f"BTC data file {btc_price_data_path} is empty")
+        print(f"BTC data loaded: {btc_df.shape}")
+        btc_df = load_frame(btc_df, timeframe)
+        btc_df.columns = [f"{col}_BTCUSDT" for col in btc_df.columns]
+        print(f"BTC data columns after load_frame: {btc_df.columns.tolist()}")
+        print(f"BTC data shape: {btc_df.shape}, time range: {btc_df.index.min()} to {btc_df.index.max()}")
+        print(f"ETH data shape: {eth_df.shape}, time range: {eth_df.index.min()} to {eth_df.index.max()}")
+        df = eth_df.join(btc_df, how="inner")
+        if df.empty:
+            raise ValueError("Failed to join ETH and BTC data: resulting DataFrame is empty")
+        print(f"Combined ETH and BTC data: {df.shape}")
+
+    for lag in range(1, 11):
+        for col in ['open', 'high', 'low', 'close']:
+            df[f'{col}_{token}_lag{lag}'] = df[col].shift(lag)
+            if token == "ETHUSDT":
+                if f'{col}_BTCUSDT' not in df.columns:
+                    raise ValueError(f"Column {col}_BTCUSDT not found in DataFrame after join")
+                df[f'{col}_BTCUSDT_lag{lag}'] = df[f'{col}_BTCUSDT'].shift(lag)
+
+    df['hour_of_day'] = df.index.hour
+    df = df.dropna()
+    print(f"Features generated: {df.columns.tolist()}")
+    return df
+
+def train_model(timeframe):
+    print(f"Starting train_model with timeframe: {timeframe}")
+    eth_price_data = pd.read_csv(eth_price_data_path)
+    df = load_frame(eth_price_data, timeframe)
+    print(f"ETH data loaded: {df.shape}")
+
+    if MODEL == "XGBoost":
+        df = generate_features(df, token=TOKEN, data_provider=DATA_PROVIDER)
+        print(df.tail())
+
+        feature_cols = [f'f{i}' for i in range(81)]
+        required_cols = [f'{col}_{TOKEN}_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] + \
+                        [f'{col}_BTCUSDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] + \
+                        ['hour_of_day']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            raise ValueError(f"Missing columns in DataFrame: {missing_cols}")
+        X_train = df[required_cols]
+        X_train.columns = feature_cols
+        y_train = df['close'].shift(-1).dropna()
+        X_train = X_train.iloc[:-1]
+
+        print(f"Training data shape: {X_train.shape}, {y_train.shape}")
+
+        dtrain = xgb.DMatrix(X_train, label=y_train)
+        params = {
+            'objective': 'reg:squarederror',
+            'eval_metric': 'rmse',
+            'eta': 0.05,
+            'max_depth': 6
+        }
+        model = xgb.train(params, dtrain, num_boost_round=1000, early_stopping_rounds=10)
+
+        os.makedirs(os.path.dirname(model_file_path), exist_ok=True)
+        with open(model_file_path, "wb") as f:
+            pickle.dump(model, f)
+        print(f"Trained XGBoost model saved to {model_file_path}")
+    else:
+        print(df.tail())
+        y_train = df['close'].shift(-1).dropna().values
+        X_train = df[:-1]
+        print(f"Training data shape: {X_train.shape}, {y_train.shape}")
+
+        if MODEL == "LinearRegression":
+            model = LinearRegression()
+        elif MODEL == "SVR":
+            model = SVR()
+        elif MODEL == "KernelRidge":
+            model = KernelRidge()
+        elif MODEL == "BayesianRidge":
+            model = BayesianRidge()
+        else:
+            raise ValueError("Unsupported model")
+        
+        model.fit(X_train, y_train)
+        os.makedirs(os.path.dirname(model_file_path), exist_ok=True)
+        with open(model_file_path, "wb") as f:
+            pickle.dump(model, f)
+        print(f"Trained model saved to {model_file_path}")
+
+def get_inference(token, timeframe, region, data_provider):
+    with open(model_file_path, "rb") as f:
+        loaded_model = pickle.load(f)
+
+    if data_provider == "coingecko":
+        current_df = download_coingecko_current_day_data(token, CG_API_KEY)
+    else:
+        current_df = download_binance_current_day_data(f"{token}USDT", region)
+    X_new = load_frame(current_df, timeframe)
+    X_new = generate_features(X_new, token=token, data_provider=data_provider)
+    
+    if MODEL == "XGBoost":
+        feature_cols = [f'f{i}' for i in range(81)]
+        X_new = X_new[[f'{col}_{token}_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] +
+                      [f'{col}_BTCUSDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] +
+                      ['hour_of_day']].iloc[-1:]
+        X_new.columns = feature_cols
+        dnew = xgb.DMatrix(X_new)
+
+        print(X_new.tail())
+        print(X_new.shape)
+
+        current_price_pred = loaded_model.predict(dnew)
+        return current_price_pred[0]
+    else:
+        print(X_new.tail())
+        print(X_new.shape)
+        current_price_pred = loaded_model.predict(X_new)
+        return current_price_pred[0]

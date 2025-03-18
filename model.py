@@ -3,6 +3,7 @@ import os
 import pickle
 from zipfile import ZipFile
 import pandas as pd
+from sklearn.model_selection import train_test_split
 from sklearn.kernel_ridge import KernelRidge
 from sklearn.linear_model import BayesianRidge, LinearRegression
 from sklearn.svm import SVR
@@ -157,22 +158,27 @@ def train_model(timeframe):
         missing_cols = [col for col in required_cols if col not in df.columns]
         if missing_cols:
             raise ValueError(f"Missing columns in DataFrame: {missing_cols}")
-        X_train = df[required_cols]
-        X_train.columns = feature_cols
-        y_train = df[f'close_{TOKEN}USDT'].shift(-1).dropna()
-        X_train = X_train.iloc[:-1]
+        X = df[required_cols]
+        X.columns = feature_cols
+        y = df[f'close_{TOKEN}USDT'].shift(-1).dropna()
+        X = X.iloc[:-1]
+
+        # Split into training and validation sets
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, shuffle=False)
 
         print(f"Training data shape: {X_train.shape}, {y_train.shape}")
+        print(f"Validation data shape: {X_val.shape}, {y_val.shape}")
 
         dtrain = xgb.DMatrix(X_train, label=y_train)
+        dval = xgb.DMatrix(X_val, label=y_val)
         params = {
             'objective': 'reg:squarederror',
             'eval_metric': 'rmse',
             'eta': 0.05,
             'max_depth': 6
         }
-        # Remove early_stopping_rounds since no validation set is provided
-        model = xgb.train(params, dtrain, num_boost_round=1000)
+        # Use evals for early stopping
+        model = xgb.train(params, dtrain, num_boost_round=1000, evals=[(dval, 'validation')], early_stopping_rounds=10)
 
         os.makedirs(os.path.dirname(model_file_path), exist_ok=True)
         with open(model_file_path, "wb") as f:

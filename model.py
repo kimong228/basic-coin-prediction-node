@@ -103,12 +103,11 @@ def format_data(files_btc, files_eth, data_provider):
 
 def load_frame(frame, timeframe):
     print(f"Loading data with timeframe {timeframe}...")
-    # Use suffixed column names consistent with format_data
     df = frame.loc[:, ['open_ETHUSDT', 'high_ETHUSDT', 'low_ETHUSDT', 'close_ETHUSDT']].dropna()
     df[['open_ETHUSDT', 'high_ETHUSDT', 'low_ETHUSDT', 'close_ETHUSDT']] = df[['open_ETHUSDT', 'high_ETHUSDT', 'low_ETHUSDT', 'close_ETHUSDT']].apply(pd.to_numeric)
     
-    df.index = pd.to_datetime(df.index, errors='coerce')  # Ensure index is datetime
-    df = df.dropna(subset=['open_ETHUSDT'])  # Ensure no NaN in key column
+    df.index = pd.to_datetime(df.index, errors='coerce')
+    df = df.dropna(subset=['open_ETHUSDT'])
     
     if df.empty:
         raise ValueError("No valid data found after cleaning.")
@@ -116,23 +115,44 @@ def load_frame(frame, timeframe):
     df.sort_index(inplace=True)
     return df.resample(f'{timeframe}', label='right', closed='right', origin='end').mean()
 
+def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER):
+    print(f"Generating features for token: {token}, data_provider: {data_provider}")
+    print(f"Data shape before processing: {df.shape}")
+    print(f"Data columns: {df.columns.tolist()}")
+
+    if token == "ETHUSDT" and not any(col.endswith('_BTCUSDT') for col in df.columns):
+        print("BTC data missing, loading from training_price_data_path...")
+        combined_df = pd.read_csv(training_price_data_path, index_col='date', parse_dates=True)
+        df = combined_df
+        print(f"Combined data loaded: {df.shape}, columns: {df.columns.tolist()}")
+
+    required_cols = [f'{col}_{token}_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] + \
+                    [f'{col}_BTCUSDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] + \
+                    ['hour_of_day']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Missing columns in DataFrame during inference: {missing_cols}")
+    
+    print(f"Features verified: {df.columns.tolist()}")
+    print(f"Final data shape: {df.shape}")
+    return df
+
 def train_model(timeframe):
     print(f"Starting train_model with timeframe: {timeframe}")
-    # Load existing combined data
     if not os.path.exists(training_price_data_path):
         raise FileNotFoundError(f"Training data file not found at {training_price_data_path}. Run update_data first.")
     
     price_data = pd.read_csv(training_price_data_path, index_col='date', parse_dates=True)
-    df = price_data  # Use full DataFrame directly, no need for load_frame here
+    df = price_data
     print(f"Loaded data: {df.shape}, columns: {df.columns.tolist()}")
 
     if MODEL == "XGBoost":
-        # No need to regenerate features, use those from price_data.csv
         print("DataFrame before training:")
         print(df.tail())
 
         feature_cols = [f'f{i}' for i in range(81)]
-        required_cols = [f'{col}_{TOKEN}_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] + \
+        # Use full column names with USDT suffix
+        required_cols = [f'{col}_{TOKEN}USDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] + \
                         [f'{col}_BTCUSDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] + \
                         ['hour_of_day']
         missing_cols = [col for col in required_cols if col not in df.columns]
@@ -140,7 +160,7 @@ def train_model(timeframe):
             raise ValueError(f"Missing columns in DataFrame: {missing_cols}")
         X_train = df[required_cols]
         X_train.columns = feature_cols
-        y_train = df[f'close_{TOKEN}'].shift(-1).dropna()  # Use close_ETHUSDT as target
+        y_train = df[f'close_{TOKEN}USDT'].shift(-1).dropna()
         X_train = X_train.iloc[:-1]
 
         print(f"Training data shape: {X_train.shape}, {y_train.shape}")
@@ -160,7 +180,7 @@ def train_model(timeframe):
         print(f"Trained XGBoost model saved to {model_file_path}")
     else:
         print(df.tail())
-        y_train = df[f'close_{TOKEN}'].shift(-1).dropna().values
+        y_train = df[f'close_{TOKEN}USDT'].shift(-1).dropna().values
         X_train = df[:-1]
         print(f"Training data shape: {X_train.shape}, {y_train.shape}")
 
@@ -190,13 +210,11 @@ def get_inference(token, timeframe, region, data_provider):
     else:
         current_df = download_binance_current_day_data(f"{token}USDT", region)
     X_new = load_frame(current_df, timeframe)
-    
-    # Use generate_features only for inference if needed
     X_new = generate_features(X_new, token=token, data_provider=data_provider)
     
     if MODEL == "XGBoost":
         feature_cols = [f'f{i}' for i in range(81)]
-        X_new = X_new[[f'{col}_{token}_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] +
+        X_new = X_new[[f'{col}_{token}USDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] +
                       [f'{col}_BTCUSDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] +
                       ['hour_of_day']].iloc[-1:]
         X_new.columns = feature_cols
@@ -212,27 +230,3 @@ def get_inference(token, timeframe, region, data_provider):
         print(X_new.shape)
         current_price_pred = loaded_model.predict(X_new)
         return current_price_pred[0]
-
-def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER):
-    print(f"Generating features for token: {token}, data_provider: {data_provider}")
-    print(f"Data shape before processing: {df.shape}")
-    print(f"Data columns: {df.columns.tolist()}")
-
-    # For inference, ensure BTC data is included if missing
-    if token == "ETHUSDT" and not any(col.endswith('_BTCUSDT') for col in df.columns):
-        print("BTC data missing, loading from training_price_data_path...")
-        combined_df = pd.read_csv(training_price_data_path, index_col='date', parse_dates=True)
-        df = combined_df
-        print(f"Combined data loaded: {df.shape}, columns: {df.columns.tolist()}")
-
-    # Features are already generated in format_data, no need to regenerate here unless for inference
-    required_cols = [f'{col}_{token}_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] + \
-                    [f'{col}_BTCUSDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] + \
-                    ['hour_of_day']
-    missing_cols = [col for col in required_cols if col not in df.columns]
-    if missing_cols:
-        raise ValueError(f"Missing columns in DataFrame during inference: {missing_cols}")
-    
-    print(f"Features verified: {df.columns.tolist()}")
-    print(f"Final data shape: {df.shape}")
-    return df

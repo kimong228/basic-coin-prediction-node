@@ -38,9 +38,8 @@ def format_data(files, data_provider, output_path):
         print("No new files to process")
         return
     
-    print(f"Files received: {files}")  # 调试：打印文件列表
+    print(f"Files received: {files}")
     
-    # 过滤文件，使用 os.path.basename 提取文件名
     if data_provider == "binance":
         files = [f for f in files if os.path.basename(f).startswith(f"{TOKEN}USDT")]
     elif data_provider == "coingecko":
@@ -112,16 +111,21 @@ def load_frame(frame, timeframe):
     df.sort_index(inplace=True)
     return df.resample(f'{timeframe}', label='right', closed='right', origin='end').mean()
 
-def generate_features(df, token="ETHUSDT"):
+def generate_features(df, token="ETHUSDT", data_provider="binance"):
     """Generate lag features for ETH and BTC"""
     if token == "ETHUSDT":
         eth_df = df.copy()
-        btc_files = download_data_binance("BTC", TRAINING_DAYS, REGION, "binance")
-        format_data(btc_files, "binance", btc_price_data_path)
+        print("Downloading BTC data...")
+        btc_files = download_data_binance("BTC", TRAINING_DAYS, REGION, data_provider)
+        format_data(btc_files, data_provider, btc_price_data_path)
+        if not os.path.exists(btc_price_data_path):
+            raise FileNotFoundError(f"BTC data file not found at {btc_price_data_path}")
         btc_df = pd.read_csv(btc_price_data_path)
+        print(f"BTC data loaded: {btc_df.shape}")
         btc_df = load_frame(btc_df, timeframe)
         btc_df.columns = [f"{col}_BTCUSDT" for col in btc_df.columns]
         df = eth_df.join(btc_df, how="inner")
+        print(f"Combined ETH and BTC data: {df.shape}")
 
     for lag in range(1, 11):
         for col in ['open', 'high', 'low', 'close']:
@@ -138,7 +142,7 @@ def train_model(timeframe):
     df = load_frame(eth_price_data, timeframe)
 
     if MODEL == "XGBoost":
-        df = generate_features(df, token=TOKEN)
+        df = generate_features(df, token=TOKEN, data_provider="binance")
         print(df.tail())
 
         feature_cols = [f'f{i}' for i in range(81)]
@@ -196,7 +200,7 @@ def get_inference(token, timeframe, region, data_provider):
     else:
         current_df = download_binance_current_day_data(f"{token}USDT", region)
     X_new = load_frame(current_df, timeframe)
-    X_new = generate_features(X_new, token=token)
+    X_new = generate_features(X_new, token=token, data_provider=data_provider)
     
     if MODEL == "XGBoost":
         feature_cols = [f'f{i}' for i in range(81)]

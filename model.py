@@ -77,7 +77,24 @@ def load_frame(frame, timeframe):
     print(f"Loading data...")
     df = frame.loc[:, ['open', 'high', 'low', 'close']].dropna()
     df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].apply(pd.to_numeric)
-    df['date'] = frame['date'].apply(pd.to_datetime)
+    
+    # 清理日期列
+    df['date'] = frame['date']
+    # 转换为时间戳（假设单位是毫秒），并检查范围
+    try:
+        df['date'] = pd.to_numeric(df['date'])  # 先尝试转换为数值
+        # 假设时间戳是毫秒，转换为秒并检查合理性（1970-2100年）
+        df = df[(df['date'] >= 0) & (df['date'] <= 4102444800000)]  # 2100-01-01 的毫秒时间戳
+        df['date'] = pd.to_datetime(df['date'], unit='ms', errors='coerce')
+    except ValueError:
+        # 如果已经是字符串格式，直接解析并忽略错误
+        df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    
+    # 移除无效日期
+    df = df.dropna(subset=['date'])
+    if df.empty:
+        raise ValueError("No valid dates found in the data after cleaning.")
+    
     df.set_index('date', inplace=True)
     df.sort_index(inplace=True)
     return df.resample(f'{timeframe}', label='right', closed='right', origin='end').mean()

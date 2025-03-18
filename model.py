@@ -126,7 +126,7 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER):
         df = combined_df
         print(f"Combined data loaded: {df.shape}, columns: {df.columns.tolist()}")
 
-    required_cols = [f'{col}_{token}_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] + \
+    required_cols = [f'{col}_{token}USDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] + \
                     [f'{col}_BTCUSDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] + \
                     ['hour_of_day']
     missing_cols = [col for col in required_cols if col not in df.columns]
@@ -151,7 +151,6 @@ def train_model(timeframe):
         print(df.tail())
 
         feature_cols = [f'f{i}' for i in range(81)]
-        # Use full column names with USDT suffix
         required_cols = [f'{col}_{TOKEN}USDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] + \
                         [f'{col}_BTCUSDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] + \
                         ['hour_of_day']
@@ -172,7 +171,8 @@ def train_model(timeframe):
             'eta': 0.05,
             'max_depth': 6
         }
-        model = xgb.train(params, dtrain, num_boost_round=1000, early_stopping_rounds=10)
+        # Remove early_stopping_rounds since no validation set is provided
+        model = xgb.train(params, dtrain, num_boost_round=1000)
 
         os.makedirs(os.path.dirname(model_file_path), exist_ok=True)
         with open(model_file_path, "wb") as f:

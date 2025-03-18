@@ -57,8 +57,10 @@ def format_data(files, data_provider):
                 header = 0 if line.decode("utf-8").startswith("open_time") else None
             df = pd.read_csv(myzip.open(myzip.filelist[0]), header=header).iloc[:, :11]
             df.columns = ["start_time", "open", "high", "low", "close", "volume", "end_time", "volume_usd", "n_trades", "taker_volume", "taker_volume_usd"]
-            # 检查时间戳
+            # 检查时间戳并转换为毫秒
             print(f"Processing {file}, end_time sample: {df['end_time'].head(5)}")
+            # 假设时间戳是微秒，除以 1000 转为毫秒
+            df['end_time'] = df['end_time'] // 1000  # 微秒 -> 毫秒
             df.index = [pd.Timestamp(x + 1, unit="ms").to_datetime64() for x in df["end_time"]]
             df.index.name = "date"
             price_df = pd.concat([price_df, df])
@@ -69,7 +71,6 @@ def format_data(files, data_provider):
                 data = json.load(f)
                 df = pd.DataFrame(data)
                 df.columns = ["timestamp", "open", "high", "low", "close"]
-                # 检查时间戳
                 print(f"Processing {file}, timestamp sample: {df['timestamp'].head(5)}")
                 df["date"] = pd.to_datetime(df["timestamp"], unit="ms")
                 df.drop(columns=["timestamp"], inplace=True)
@@ -84,14 +85,15 @@ def load_frame(frame, timeframe):
     
     # 清理日期列
     df['date'] = frame['date']
-    # 转换为时间戳（假设单位是毫秒），并检查范围
+    # 尝试将日期转换为时间戳
     try:
-        df['date'] = pd.to_numeric(df['date'])  # 先尝试转换为数值
-        # 假设时间戳是毫秒，转换为秒并检查合理性（1970-2100年）
-        df = df[(df['date'] >= 0) & (df['date'] <= 4102444800000)]  # 2100-01-01 的毫秒时间戳
+        df['date'] = pd.to_numeric(df['date'])  # 先转换为数值
+        # 如果时间戳过大（微秒），转换为毫秒
+        if df['date'].max() > 4102444800000:  # 超过 2100-01-01 的毫秒时间戳
+            df['date'] = df['date'] // 1000  # 微秒 -> 毫秒
         df['date'] = pd.to_datetime(df['date'], unit='ms', errors='coerce')
     except ValueError:
-        # 如果已经是字符串格式，直接解析并忽略错误
+        # 如果已经是字符串格式，直接解析
         df['date'] = pd.to_datetime(df['date'], errors='coerce')
     
     # 移除无效日期

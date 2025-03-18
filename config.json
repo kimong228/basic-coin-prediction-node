@@ -6,7 +6,7 @@
       "addressKeyName": "testkey",
       "addressRestoreMnemonic": "charge detect length school habit artwork acid panther bench toy blanket muscle square praise concert price save essay discover between ice twice viable birth",
       "alloraHomeDir": "",
-      "gasPrices": 0.025,
+      "gasPrices": "auto",
       "gasPriceUpdateInterval": 5,
       "maxFees": 50000000,
       "gasAdjustment": 1.2,

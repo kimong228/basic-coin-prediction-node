@@ -11,10 +11,11 @@ services:
     ports:
       - "8000:8000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://inference:8000/inference/${TOKEN}"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/inference/${TOKEN}"]  # 使用 localhost，避免容器名称解析问题
       interval: 10s
-      timeout: 5s
+      timeout: 10s   # 延长超时到 10 秒
       retries: 12
+      start_period: 30s  # 添加 30 秒启动延迟，等待服务就绪
     volumes:
       - ./inference-data:/app/data
     environment:

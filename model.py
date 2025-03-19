@@ -126,7 +126,7 @@ def load_frame(frame, timeframe):
     print(f"Loaded frame shape: {df.shape}, index type: {type(df.index)}")
     return df
 
-def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER, timeframe='6h'):
+def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER, timeframe='1h'):
     print(f"Generating features for token: {token}, data_provider: {data_provider}")
     print(f"Data shape before processing: {df.shape}")
     print(f"Data columns: {df.columns.tolist()}")

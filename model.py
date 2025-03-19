@@ -138,13 +138,17 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER, timefram
         hist_df_eth = hist_df[[f'{col}_{token}USDT' for col in ['open', 'high', 'low', 'close']]].resample(timeframe).mean()
         hist_df_btc = hist_df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]].resample(timeframe).mean()
         
-        # Combine with real-time data, avoiding column overlap
+        # Combine ETH and BTC data with real-time data
         combined_df = pd.concat([hist_df_eth, df[[f'{col}_{token}USDT' for col in ['open', 'high', 'low', 'close']]]], axis=0, join='outer')
-        combined_df = pd.concat([combined_df, hist_df_btc], axis=1, join='outer')
+        combined_df = pd.concat([combined_df, hist_df_btc, df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]]], axis=1, join='outer')
         
         # Reset index to ensure DatetimeIndex after merging
         combined_df.index = pd.to_datetime(combined_df.index, errors='coerce')
         print(f"After merging ETH and BTC, index type: {type(combined_df.index)}, shape: {combined_df.shape}")
+        
+        # Handle duplicate columns by keeping the first occurrence
+        combined_df = combined_df.loc[:, ~combined_df.columns.duplicated()]
+        print(f"After removing duplicates, shape: {combined_df.shape}, columns: {combined_df.columns.tolist()}")
         df = combined_df
     else:
         print("No historical data found, using only real-time data.")

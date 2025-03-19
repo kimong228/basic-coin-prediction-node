@@ -131,14 +131,6 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER, timefram
     print(f"Data shape before processing: {df.shape}")
     print(f"Data columns: {df.columns.tolist()}")
 
-    # Rename columns to match training data
-    df = df.rename(columns={
-        'open': f'open_{token}USDT',
-        'high': f'high_{token}USDT',
-        'low': f'low_{token}USDT',
-        'close': f'close_{token}USDT'
-    })
-
     # Load and resample historical data to match timeframe
     if os.path.exists(training_price_data_path):
         hist_df = pd.read_csv(training_price_data_path, index_col='date', parse_dates=True)
@@ -146,9 +138,9 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER, timefram
         hist_df_eth = hist_df[[f'{col}_{token}USDT' for col in ['open', 'high', 'low', 'close']]].resample(timeframe).mean()
         hist_df_btc = hist_df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]].resample(timeframe).mean()
         
-        # Combine with real-time data, ensuring DatetimeIndex
-        df = pd.concat([hist_df_eth, df], axis=0, join='outer')
-        df = df.join(hist_df_btc, how='outer')
+        # Combine with real-time data, avoiding column overlap
+        df = pd.concat([hist_df_eth, df[[col for col in df.columns if col not in hist_df_btc.columns]]], axis=0, join='outer')
+        df = pd.concat([df, hist_df_btc], axis=1, join='outer')
         
         # Reset index to ensure DatetimeIndex after merging
         df.index = pd.to_datetime(df.index, errors='coerce')

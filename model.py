@@ -138,13 +138,17 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER, timefram
         hist_df_eth = hist_df[[f'{col}_{token}USDT' for col in ['open', 'high', 'low', 'close']]].resample(timeframe).mean()
         hist_df_btc = hist_df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]].resample(timeframe).mean()
         
-        # Combine ETH and BTC data with real-time data
-        combined_df = pd.concat([hist_df_eth, df[[f'{col}_{token}USDT' for col in ['open', 'high', 'low', 'close']]]], axis=0, join='outer')
-        combined_df = pd.concat([combined_df, hist_df_btc, df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]]], axis=1, join='outer')
+        # Combine ETH and BTC data with real-time data, step-by-step
+        combined_df = pd.concat([hist_df_eth, df[[f'{col}_{token}USDT' for col in ['open', 'high', 'low', 'close']]]], axis=0)
+        print(f"After merging ETH, index type: {type(combined_df.index)}, shape: {combined_df.shape}")
+        combined_df = pd.concat([combined_df, hist_df_btc], axis=1)
+        print(f"After merging BTC (hist), index type: {type(combined_df.index)}, shape: {combined_df.shape}")
+        combined_df = pd.concat([combined_df, df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]]], axis=0)
+        print(f"After merging BTC (real-time), index type: {type(combined_df.index)}, shape: {combined_df.shape}")
         
         # Reset index to ensure DatetimeIndex after merging
         combined_df.index = pd.to_datetime(combined_df.index, errors='coerce')
-        print(f"After merging ETH and BTC, index type: {type(combined_df.index)}, shape: {combined_df.shape}")
+        print(f"After resetting index, index type: {type(combined_df.index)}, shape: {combined_df.shape}")
         
         # Handle duplicate columns by keeping the first occurrence
         combined_df = combined_df.loc[:, ~combined_df.columns.duplicated()]

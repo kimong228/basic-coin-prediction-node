@@ -137,14 +137,11 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER, timefram
         hist_df_eth = hist_df[[f'{col}_{token}USDT' for col in ['open', 'high', 'low', 'close']]].resample(timeframe).mean()
         hist_df_btc = hist_df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]].resample(timeframe).mean()
         
-        # Combine historical and real-time data
-        combined_df = pd.concat([hist_df_eth, df[[f'{col}_{token}USDT' for col in ['open', 'high', 'low', 'close']]]], axis=0)
+        # Combine historical and real-time data with proper alignment
+        combined_df = pd.concat([hist_df_eth, hist_df_btc], axis=1, join='outer')
+        combined_df = pd.concat([combined_df, df], axis=0, join='outer')
         combined_df.index = pd.to_datetime(combined_df.index, errors='coerce')
-        print(f"After merging ETH, index type: {type(combined_df.index)}, shape: {combined_df.shape}")
-        
-        combined_df = pd.concat([combined_df, hist_df_btc, df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]]], axis=0)
-        combined_df.index = pd.to_datetime(combined_df.index, errors='coerce')
-        print(f"After merging BTC, index type: {type(combined_df.index)}, shape: {combined_df.shape}")
+        print(f"After merging historical and real-time data, index type: {type(combined_df.index)}, shape: {combined_df.shape}")
         
         # Remove duplicate columns
         combined_df = combined_df.loc[:, ~combined_df.columns.duplicated()]
@@ -167,14 +164,9 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER, timefram
             raise ValueError("Failed to convert index to DatetimeIndex.")
     
     df['hour_of_day'] = df.index.hour
-    df = df.dropna()
-    if df.empty:
-        print("Warning: DataFrame is empty after dropping NaN values. Returning last available data point.")
-        # Fallback: Use last available data with partial features
-        df = combined_df.tail(1).copy()
-        for col in df.columns:
-            if col.startswith(f"{token}USDT_lag") or col.startswith("BTCUSDT_lag"):
-                df[col] = np.nan  # Reset lag features to NaN for last row
+    df = df.tail(11)  # Ensure at least 11 rows for 10 lags
+    df = df.fillna(method='ffill')  # Forward fill NaN values
+    print(f"After filling NaN values, shape: {df.shape}, columns: {df.columns.tolist()}")
     
     print(f"Features generated: {df.columns.tolist()}")
     print(f"Final data shape: {df.shape}")
@@ -322,7 +314,8 @@ def get_inference(token, timeframe, region, data_provider):
                       [f'{col}_BTCUSDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] +
                       ['hour_of_day']].iloc[-1:]
         if X_new.empty or X_new.isna().any().any():
-            raise ValueError("Inference data is empty or contains NaN values after feature generation.")
+            print("Warning: Inference data contains NaN values. Filling with forward fill.")
+            X_new = X_new.fillna(method='ffill').fillna(method='bfill')  # Fill NaN values
         X_new.columns = feature_cols
         dnew = xgb.DMatrix(X_new)
 

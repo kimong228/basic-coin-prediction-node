@@ -119,7 +119,11 @@ def load_frame(frame, timeframe):
         raise ValueError("No valid data found after cleaning.")
     
     df.sort_index(inplace=True)
-    return df.resample(f'{timeframe}', label='right', closed='right', origin='end').mean()
+    # Ensure index is DatetimeIndex after resampling
+    df = df.resample(f'{timeframe}', label='right', closed='right', origin='end').mean()
+    if not isinstance(df.index, pd.DatetimeIndex):
+        raise ValueError("Index is not a DatetimeIndex after resampling.")
+    return df
 
 def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER):
     print(f"Generating features for token: {token}, data_provider: {data_provider}")
@@ -156,6 +160,12 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER):
         for lag in range(1, 11):
             df[f"{metric}_BTCUSDT_lag{lag}"] = df[f"{metric}_BTCUSDT"].shift(lag)
 
+    # Ensure index is DatetimeIndex before accessing hour
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index, errors='coerce')
+        if not isinstance(df.index, pd.DatetimeIndex):
+            raise ValueError("Failed to convert index to DatetimeIndex.")
+    
     df['hour_of_day'] = df.index.hour
     df = df.dropna()
     print(f"Features generated: {df.columns.tolist()}")

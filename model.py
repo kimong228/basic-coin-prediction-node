@@ -1,3 +1,4 @@
+# XGB, ETH 30day 1h
 import json
 import os
 import pickle

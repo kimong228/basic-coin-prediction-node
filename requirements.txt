@@ -1,10 +1,10 @@
-flask[async]
+flask==2.3.2
 gunicorn[gthread]
-numpy
-pandas==2.2.2
+numpy==1.24.3
+pandas==1.5.3
 Requests
 aiohttp
 multiprocess
-scikit_learn
+scikit_learn==1.2.2
 python-dotenv
-xgboost
+xgboost==1.7.6

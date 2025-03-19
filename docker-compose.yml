@@ -3,30 +3,30 @@ services:
   inference:
     container_name: inference
     env_file:
-      - .env  # 加载 .env 文件，包含 TRAINING_DAYS=30, TIMEFRAME=1h 等配置
+      - .env
     build:
       context: .
-      dockerfile: Dockerfile.inference  # 指定专用的 Dockerfile，确保依赖一致
-    command: python -u /app/app.py  # 运行 app.py，-u 确保实时日志输出
+      dockerfile: Dockerfile.inference
+    command: python -u /app/app.py
     ports:
-      - "8000:8000"  # 映射端口到主机
+      - "8000:8000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://inference:8000/inference/${TOKEN}"]  # 检查推理端点健康状态
+      test: ["CMD", "curl", "-f", "http://inference:8000/inference/${TOKEN}"]
       interval: 10s
       timeout: 5s
       retries: 12
     volumes:
-      - ./inference-data:/app/data  # 挂载数据目录，确保模型和数据持久化
+      - ./inference-data:/app/data
     environment:
-      - PYTHONUNBUFFERED=1  # 确保 Python 输出实时显示，避免缓冲
+      - PYTHONUNBUFFERED=1
 
   updater:
     container_name: updater
     build:
       context: .
-      dockerfile: Dockerfile.updater  # 建议为 updater 创建专用 Dockerfile
+      dockerfile: Dockerfile.updater
     environment:
-      - INFERENCE_API_ADDRESS=http://inference:8000  # 指向 inference 服务
+      - INFERENCE_API_ADDRESS=http://inference:8000
     command: >
       sh -c "
       while true; do
@@ -36,21 +36,21 @@ services:
       "
     depends_on:
       inference:
-        condition: service_healthy  # 等待 inference 服务健康
+        condition: service_healthy
     volumes:
-      - ./inference-data:/app/data  # 与 inference 共享数据目录
+      - ./inference-data:/app/data
 
   worker:
     container_name: worker
-    image: alloranetwork/allora-offchain-node:v0.9.1  # 更新到 v0.9.1
+    image: alloranetwork/allora-offchain-node:v0.9.1
     volumes:
-      - ./worker-data:/data  # worker 数据目录
+      - ./worker-data:/data
     depends_on:
       inference:
-        condition: service_healthy  # 等待 inference 服务健康
+        condition: service_healthy
     env_file:
-      - ./worker-data/env_file  # worker 的环境变量文件
+      - ./worker-data/env_file
 
 volumes:
-  inference-data:  # 用于 inference 和 updater 的共享数据卷
-  worker-data:     # 用于 worker 的数据卷
+  inference-data:
+  worker-data:

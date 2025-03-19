@@ -1,4 +1,3 @@
-# XGB, ETH 30day 1h
 import json
 import os
 import pickle
@@ -11,8 +10,11 @@ from sklearn.kernel_ridge import KernelRidge
 from sklearn.linear_model import BayesianRidge, LinearRegression
 from sklearn.svm import SVR
 import xgboost as xgb
+from flask import Flask, jsonify
 from updater import download_binance_daily_data, download_binance_current_day_data, download_coingecko_data, download_coingecko_current_day_data
 from config import data_base_path, model_file_path, TOKEN, MODEL, CG_API_KEY, TRAINING_DAYS, REGION, DATA_PROVIDER
+
+app = Flask(__name__)
 
 binance_data_path = os.path.join(data_base_path, "binance")
 coingecko_data_path = os.path.join(data_base_path, "coingecko")
@@ -166,7 +168,7 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER, timefram
     
     df['hour_of_day'] = df.index.hour
     df = df.tail(11)  # Ensure at least 11 rows for 10 lags
-    df = df.fillna(method='ffill')  # Forward fill NaN values
+    df = df.fillna(method='ffill').fillna(method='bfill')  # Fill NaN values forward and backward
     print(f"After filling NaN values, shape: {df.shape}, columns: {df.columns.tolist()}")
     
     print(f"Features generated: {df.columns.tolist()}")
@@ -330,3 +332,21 @@ def get_inference(token, timeframe, region, data_provider):
         print(X_new.shape)
         current_price_pred = loaded_model.predict(X_new)
         return current_price_pred[0]
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    if os.path.exists(model_file_path):
+        return jsonify({"status": "healthy"}), 200
+    return jsonify({"status": "unhealthy", "error": "Model file not found"}), 503
+
+@app.route('/inference/<token>', methods=['GET'])
+def inference(token):
+    try:
+        price = get_inference(token, TIMEFRAME, REGION, DATA_PROVIDER)
+        return str(price)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == "__main__":
+    train_model(TIMEFRAME)
+    app.run(host="0.0.0.0", port=8000)

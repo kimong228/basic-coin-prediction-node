@@ -1,5 +1,6 @@
 FROM python:3.9-slim
 WORKDIR /app
 COPY . /app
-RUN pip install --no-cache-dir pandas==1.5.3 scikit-learn xgboost flask
+# 清理 pip 缓存并安装指定版本
+RUN pip install --no-cache-dir -r requirements.txt
 CMD ["python", "-u", "app.py"]

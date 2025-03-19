@@ -125,7 +125,7 @@ def load_frame(frame, timeframe):
         raise ValueError("Index is not a DatetimeIndex after resampling.")
     return df
 
-def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER):
+def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER, timeframe='6h'):
     print(f"Generating features for token: {token}, data_provider: {data_provider}")
     print(f"Data shape before processing: {df.shape}")
     print(f"Data columns: {df.columns.tolist()}")
@@ -138,12 +138,12 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER):
         'close': f'close_{token}USDT'
     })
 
-    # Load historical data for sufficient lag
+    # Load and resample historical data to match timeframe
     if os.path.exists(training_price_data_path):
         hist_df = pd.read_csv(training_price_data_path, index_col='date', parse_dates=True)
         hist_df = hist_df.tail(14400)  # Last 10 days for efficiency
-        hist_df_eth = hist_df[[f'{col}_{token}USDT' for col in ['open', 'high', 'low', 'close']]]
-        hist_df_btc = hist_df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]]
+        hist_df_eth = hist_df[[f'{col}_{token}USDT' for col in ['open', 'high', 'low', 'close']]].resample(timeframe).mean()
+        hist_df_btc = hist_df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]].resample(timeframe).mean()
         df = pd.concat([hist_df_eth, df], axis=0)
 
     # Generate ETH lag features
@@ -168,6 +168,9 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER):
     
     df['hour_of_day'] = df.index.hour
     df = df.dropna()
+    if df.empty:
+        raise ValueError("Generated DataFrame is empty after dropping NaN values.")
+    
     print(f"Features generated: {df.columns.tolist()}")
     print(f"Final data shape: {df.shape}")
     return df
@@ -301,13 +304,15 @@ def get_inference(token, timeframe, region, data_provider):
     })
 
     X_new = pd.concat([X_new_eth, X_new_btc], axis=1)
-    X_new = generate_features(X_new, token=token, data_provider=data_provider)
+    X_new = generate_features(X_new, token=token, data_provider=data_provider, timeframe=timeframe)
     
     if MODEL == "XGBoost":
         feature_cols = [f'f{i}' for i in range(81)]
         X_new = X_new[[f'{col}_{token}USDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] +
                       [f'{col}_BTCUSDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] +
                       ['hour_of_day']].iloc[-1:]
+        if X_new.empty:
+            raise ValueError("No valid data available for inference after feature generation.")
         X_new.columns = feature_cols
         dnew = xgb.DMatrix(X_new)
 

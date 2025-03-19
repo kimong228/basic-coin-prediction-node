@@ -119,7 +119,6 @@ def load_frame(frame, timeframe):
         raise ValueError("No valid data found after cleaning.")
     
     df.sort_index(inplace=True)
-    # Ensure index is DatetimeIndex after resampling
     df = df.resample(f'{timeframe}', label='right', closed='right', origin='end').mean()
     if not isinstance(df.index, pd.DatetimeIndex):
         raise ValueError("Index is not a DatetimeIndex after resampling.")
@@ -139,11 +138,11 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER, timefram
         hist_df_btc = hist_df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]].resample(timeframe).mean()
         
         # Combine historical and real-time data
-        combined_df = pd.concat([hist_df_eth, df[[f'{col}_{token}USDT' for col in ['open', 'high', 'low', 'close']]]], axis=0, ignore_index=False)
+        combined_df = pd.concat([hist_df_eth, df[[f'{col}_{token}USDT' for col in ['open', 'high', 'low', 'close']]]], axis=0)
         combined_df.index = pd.to_datetime(combined_df.index, errors='coerce')
         print(f"After merging ETH, index type: {type(combined_df.index)}, shape: {combined_df.shape}")
         
-        combined_df = pd.concat([combined_df, hist_df_btc, df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]]], axis=0, ignore_index=False)
+        combined_df = pd.concat([combined_df, hist_df_btc, df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]]], axis=0)
         combined_df.index = pd.to_datetime(combined_df.index, errors='coerce')
         print(f"After merging BTC, index type: {type(combined_df.index)}, shape: {combined_df.shape}")
         
@@ -154,14 +153,11 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER, timefram
     else:
         print("No historical data found, using only real-time data.")
 
-    # Generate ETH lag features
+    # Generate lag features with limited range if data is insufficient
+    max_lag = min(10, len(df) - 1)  # Limit lag to available data points
     for metric in ["open", "high", "low", "close"]:
-        for lag in range(1, 11):
+        for lag in range(1, max_lag + 1):
             df[f"{metric}_{token}USDT_lag{lag}"] = df[f"{metric}_{token}USDT"].shift(lag)
-
-    # Generate BTC lag features
-    for metric in ["open", "high", "low", "close"]:
-        for lag in range(1, 11):
             df[f"{metric}_BTCUSDT_lag{lag}"] = df[f"{metric}_BTCUSDT"].shift(lag)
 
     # Ensure index is DatetimeIndex before accessing hour
@@ -173,7 +169,12 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER, timefram
     df['hour_of_day'] = df.index.hour
     df = df.dropna()
     if df.empty:
-        raise ValueError("Generated DataFrame is empty after dropping NaN values.")
+        print("Warning: DataFrame is empty after dropping NaN values. Returning last available data point.")
+        # Fallback: Use last available data with partial features
+        df = combined_df.tail(1).copy()
+        for col in df.columns:
+            if col.startswith(f"{token}USDT_lag") or col.startswith("BTCUSDT_lag"):
+                df[col] = np.nan  # Reset lag features to NaN for last row
     
     print(f"Features generated: {df.columns.tolist()}")
     print(f"Final data shape: {df.shape}")
@@ -320,8 +321,8 @@ def get_inference(token, timeframe, region, data_provider):
         X_new = X_new[[f'{col}_{token}USDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] +
                       [f'{col}_BTCUSDT_lag{lag}' for col in ['open', 'high', 'low', 'close'] for lag in range(1, 11)] +
                       ['hour_of_day']].iloc[-1:]
-        if X_new.empty:
-            raise ValueError("No valid data available for inference after feature generation.")
+        if X_new.empty or X_new.isna().any().any():
+            raise ValueError("Inference data is empty or contains NaN values after feature generation.")
         X_new.columns = feature_cols
         dnew = xgb.DMatrix(X_new)
 

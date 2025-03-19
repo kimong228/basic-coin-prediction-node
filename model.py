@@ -123,6 +123,7 @@ def load_frame(frame, timeframe):
     df = df.resample(f'{timeframe}', label='right', closed='right', origin='end').mean()
     if not isinstance(df.index, pd.DatetimeIndex):
         raise ValueError("Index is not a DatetimeIndex after resampling.")
+    print(f"Loaded frame shape: {df.shape}, index type: {type(df.index)}")
     return df
 
 def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER, timeframe='6h'):
@@ -144,9 +145,14 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER, timefram
         hist_df = hist_df.tail(14400)  # Last 10 days for efficiency
         hist_df_eth = hist_df[[f'{col}_{token}USDT' for col in ['open', 'high', 'low', 'close']]].resample(timeframe).mean()
         hist_df_btc = hist_df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]].resample(timeframe).mean()
-        # Combine with real-time data
-        df = pd.concat([hist_df_eth, df], axis=0)
-        df = pd.concat([df, hist_df_btc], axis=1)
+        
+        # Combine with real-time data, ensuring DatetimeIndex
+        df = pd.concat([hist_df_eth, df], axis=0, join='outer')
+        df = df.join(hist_df_btc, how='outer')
+        
+        # Reset index to ensure DatetimeIndex after merging
+        df.index = pd.to_datetime(df.index, errors='coerce')
+        print(f"After merging, index type: {type(df.index)}, shape: {df.shape}")
 
     # Generate ETH lag features
     for metric in ["open", "high", "low", "close"]:

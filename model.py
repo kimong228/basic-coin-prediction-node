@@ -1,4 +1,3 @@
-# XGB working
 import json
 import os
 import pickle
@@ -140,12 +139,15 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER, timefram
         hist_df_btc = hist_df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]].resample(timeframe).mean()
         
         # Combine with real-time data, avoiding column overlap
-        df = pd.concat([hist_df_eth, df[[col for col in df.columns if col not in hist_df_btc.columns]]], axis=0, join='outer')
-        df = pd.concat([df, hist_df_btc], axis=1, join='outer')
+        combined_df = pd.concat([hist_df_eth, df[[f'{col}_{token}USDT' for col in ['open', 'high', 'low', 'close']]]], axis=0, join='outer')
+        combined_df = pd.concat([combined_df, hist_df_btc], axis=1, join='outer')
         
         # Reset index to ensure DatetimeIndex after merging
-        df.index = pd.to_datetime(df.index, errors='coerce')
-        print(f"After merging, index type: {type(df.index)}, shape: {df.shape}")
+        combined_df.index = pd.to_datetime(combined_df.index, errors='coerce')
+        print(f"After merging ETH and BTC, index type: {type(combined_df.index)}, shape: {combined_df.shape}")
+        df = combined_df
+    else:
+        print("No historical data found, using only real-time data.")
 
     # Generate ETH lag features
     for metric in ["open", "high", "low", "close"]:

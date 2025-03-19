@@ -144,18 +144,16 @@ def generate_features(df, token="ETHUSDT", data_provider=DATA_PROVIDER, timefram
         hist_df = hist_df.tail(14400)  # Last 10 days for efficiency
         hist_df_eth = hist_df[[f'{col}_{token}USDT' for col in ['open', 'high', 'low', 'close']]].resample(timeframe).mean()
         hist_df_btc = hist_df[[f'{col}_BTCUSDT' for col in ['open', 'high', 'low', 'close']]].resample(timeframe).mean()
+        # Combine with real-time data
         df = pd.concat([hist_df_eth, df], axis=0)
+        df = pd.concat([df, hist_df_btc], axis=1)
 
     # Generate ETH lag features
     for metric in ["open", "high", "low", "close"]:
         for lag in range(1, 11):
             df[f"{metric}_{token}USDT_lag{lag}"] = df[f"{metric}_{token}USDT"].shift(lag)
 
-    # Add BTC data and generate BTC lag features
-    if not any(col.endswith('_BTCUSDT') for col in df.columns):
-        print("BTC data missing, adding from historical data...")
-        df = pd.concat([df, hist_df_btc], axis=1)
-    
+    # Generate BTC lag features
     for metric in ["open", "high", "low", "close"]:
         for lag in range(1, 11):
             df[f"{metric}_BTCUSDT_lag{lag}"] = df[f"{metric}_BTCUSDT"].shift(lag)
